@@ -9,8 +9,16 @@ export function writeAtomicJson(filePath: string, payload: object): void {
 	);
 	try {
 		fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), "utf-8");
-		fs.renameSync(tempPath, filePath);
+		try {
+			fs.renameSync(tempPath, filePath);
+		} catch (renameErr) {
+			if ((renameErr as NodeJS.ErrnoException).code === "EPERM") {
+				fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf-8");
+			} else {
+				throw renameErr;
+			}
+		}
 	} finally {
-		fs.rmSync(tempPath, { force: true });
+		try { fs.rmSync(tempPath, { force: true }); } catch { /* best effort */ }
 	}
 }

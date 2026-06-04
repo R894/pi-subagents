@@ -2265,17 +2265,91 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	}
 }
 
+let currentConfig: SubagentRunConfig | null = null;
+
+function writeEmergencyResult(error: unknown, type: "uncaughtException" | "unhandledRejection"): void {
+	const message = error instanceof Error ? error.message : String(error);
+	const stack = error instanceof Error ? error.stack : undefined;
+	console.error(`[pi-subagents] Fatal ${type}: ${message}`);
+	if (stack) console.error(stack);
+
+	const cfg = currentConfig;
+	currentConfig = null;
+	if (!cfg) {
+		process.exit(1);
+		return;
+	}
+
+	const now = Date.now();
+	const agentList = cfg.steps?.flatMap((s) => ("parallel" in s && Array.isArray(s.parallel) ? s.parallel.map((t) => t.agent) : [("agent" in s ? s.agent : "subagent")])) ?? ["subagent"];
+	const firstAgent = agentList[0] ?? "subagent";
+
+	try {
+		fs.mkdirSync(path.dirname(cfg.resultPath), { recursive: true });
+		writeAtomicJson(cfg.resultPath, {
+			id: cfg.id,
+			agent: firstAgent,
+			mode: cfg.resultMode ?? "single",
+			success: false,
+			state: "failed",
+			summary: `Runner process crashed with ${type}: ${message}`,
+			results: [{ agent: firstAgent, output: message, error: message, success: false }],
+			exitCode: 1,
+			timestamp: now,
+			durationMs: 0,
+			asyncDir: cfg.asyncDir,
+			sessionId: cfg.sessionId,
+		});
+
+		if (cfg.asyncDir) {
+			fs.mkdirSync(cfg.asyncDir, { recursive: true });
+			writeAtomicJson(path.join(cfg.asyncDir, "status.json"), {
+				runId: cfg.id,
+				sessionId: cfg.sessionId,
+				mode: cfg.resultMode ?? "single",
+				state: "failed",
+				lastActivityAt: now,
+				startedAt: now,
+				lastUpdate: now,
+				endedAt: now,
+				pid: process.pid,
+				cwd: cfg.cwd,
+				currentStep: 0,
+				chainStepCount: cfg.steps?.length ?? 1,
+				parallelGroups: [],
+				steps: [{
+					agent: firstAgent,
+					status: "failed",
+					error: `Runner process crashed with ${type}: ${message}`,
+					startedAt: now,
+					endedAt: now,
+					durationMs: 0,
+					exitCode: 1,
+				}],
+			});
+		}
+	} catch {
+		// Emergency result write is best effort.
+	}
+
+	process.exit(1);
+}
+
+process.on("uncaughtException", (err) => writeEmergencyResult(err, "uncaughtException"));
+process.on("unhandledRejection", (reason) => writeEmergencyResult(reason, "unhandledRejection"));
+
 const configArg = process.argv[2];
 if (configArg) {
 	try {
 		const configJson = fs.readFileSync(configArg, "utf-8");
 		const config = JSON.parse(configJson) as SubagentRunConfig;
+		currentConfig = config;
 		try {
 			fs.unlinkSync(configArg);
 		} catch {
 			// Temp config cleanup is best effort.
 		}
-		runSubagent(config).catch((runErr) => {
+		runSubagent(config).finally(() => { currentConfig = null; }).catch((runErr) => {
 			console.error("Subagent runner error:", runErr);
 			process.exit(1);
 		});
@@ -2292,7 +2366,8 @@ if (configArg) {
 	process.stdin.on("end", () => {
 		try {
 			const config = JSON.parse(input) as SubagentRunConfig;
-			runSubagent(config).catch((runErr) => {
+			currentConfig = config;
+			runSubagent(config).finally(() => { currentConfig = null; }).catch((runErr) => {
 				console.error("Subagent runner error:", runErr);
 				process.exit(1);
 			});
