@@ -64,18 +64,15 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 		content = fs.readFileSync(statusPath, "utf-8");
 	} catch (error) {
 		if (isNotFoundError(error)) return null;
-		throw new Error(`Failed to read async status file '${statusPath}': ${getErrorMessage(error)}`, {
-			cause: error instanceof Error ? error : undefined,
-		});
+		return null;
 	}
+	if (!content.trim()) return null;
 
 	let status: AsyncStatus;
 	try {
 		status = JSON.parse(content) as AsyncStatus;
-	} catch (error) {
-		throw new Error(`Failed to parse async status file '${statusPath}': ${getErrorMessage(error)}`, {
-			cause: error instanceof Error ? error : undefined,
-		});
+	} catch {
+		return null;
 	}
 
 	statusCache.set(statusPath, { mtime: stat.mtimeMs, status });

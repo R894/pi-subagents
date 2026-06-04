@@ -60,16 +60,16 @@ function readStatusFile(asyncDir: string): AsyncStatus | null {
 		content = fs.readFileSync(statusPath, "utf-8");
 	} catch (error) {
 		if (isNotFoundError(error)) return null;
-		throw new Error(`Failed to read async status file '${statusPath}': ${getErrorMessage(error)}`, {
-			cause: error instanceof Error ? error : undefined,
-		});
+		console.error(`Failed to read async status file '${statusPath}': ${getErrorMessage(error)}`);
+		return null;
 	}
+	if (!content.trim()) return null;
 	try {
 		return JSON.parse(content) as AsyncStatus;
-	} catch (error) {
-		throw new Error(`Failed to parse async status file '${statusPath}': ${getErrorMessage(error)}`, {
-			cause: error instanceof Error ? error : undefined,
-		});
+	} catch {
+		// File was truncated mid-write by another process (Windows copyFileSync race).
+		// Return null — the next poll cycle will retry after the writer updates it.
+		return null;
 	}
 }
 
